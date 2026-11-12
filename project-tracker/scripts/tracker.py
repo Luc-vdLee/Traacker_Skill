@@ -278,10 +278,13 @@ Checklist for this project. `- [ ]` is open, `- [x]` is done (add the date).
 def scaffold(root: Path) -> None:
     d = root / TRACK_DIR
     for name, text in ((".gitattributes", "CHANGELOG.md merge=union\nSUMMARY.md merge=union\n"),
-                       (".gitignore", "dashboard.html\n*.tmp\n"),
+                       (".gitignore", "dashboard*.html\n*.tmp\n"),
                        ("GOALS.md", GOALS_TEMPLATE)):
         if not (d / name).exists():
             (d / name).write_text(text)
+    ignore = d / ".gitignore"
+    if "dashboard*.html" not in ignore.read_text():
+        ignore.write_text(ignore.read_text().rstrip("\n") + "\ndashboard*.html\n")
 
 
 def read_goals(root: Path) -> tuple[list[str], list[str]]:
@@ -782,7 +785,8 @@ def cmd_hook(args) -> None:
                   f"{', '.join(drafts[-3:])}. Early in this session, replace each draft with a "
                   f"proper written entry: run `python3 \"{me}\" digest --date <day>` for the raw "
                   f"material, then pipe the entry body to `python3 \"{me}\" changelog-write "
-                  f"--date <day>`. See the project-tracker skill for the entry format. Do this "
+                  f"--date <day>`. See the project-tracker skill for the entry format, then "
+                  f"refresh the project's Claude Artifact as the skill describes. Do this "
                   f"briefly and without derailing the user's request.")
     except Exception as exc:  # noqa: BLE001
         print(f"project-tracker hook: {exc}", file=sys.stderr)
@@ -791,23 +795,29 @@ def cmd_hook(args) -> None:
 # ---------------------------------------------------------------- dashboard
 
 DASH_CSS = """
-:root{color-scheme:light;--bg:#f4f3ef;--surface:#fcfcfb;--text:#0b0b0b;--text2:#52514e;
---grid:#e4e3dd;--series:#2a78d6;--done:#8a897f}
-@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#111110;--surface:#1a1a19;
---text:#f0efec;--text2:#c3c2b7;--grid:#32322f;--series:#3987e5;--done:#8a897f}}
+/* layout: summary tiles, then two charts, then goals beside the changelog, then tables */
+:root{--bg:#f3f4f2;--surface:#fcfcfb;--text:#0b0b0b;--text2:#52514e;
+--grid:#e3e4df;--series:#2a78d6;--done:#8a897f;
+--display:"Space Grotesk",system-ui,sans-serif;--body:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#111211;
+--surface:#1a1a19;--text:#f0efec;--text2:#c3c2b7;--grid:#323330;--series:#3987e5;--done:#8a897f}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#111211;--surface:#1a1a19;--text:#f0efec;
+--text2:#c3c2b7;--grid:#323330;--series:#3987e5;--done:#8a897f}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);
-font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-main{max-width:1000px;margin:0 auto;padding:24px 16px 64px}
-h1{font-size:26px;margin:0 0 4px}h2{font-size:20px;margin:40px 0 12px}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 var(--body)}
+main{max-width:1000px;margin:0 auto;padding-block:24px 64px;
+padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1,h2,.tile b{font-family:var(--display)}
+h1{font-size:26px;margin:0 0 4px;text-wrap:balance}h2{font-size:20px;margin:40px 0 12px}
 h3{font-size:14px;margin:0 0 8px;font-weight:600}
 h4{font-size:13px;margin:12px 0 4px;color:var(--text2)}
 .sub{color:var(--text2);font-size:13px;margin:0 0 20px}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:12px}
-.card{background:var(--surface);border-radius:10px;padding:16px}
+.card{background:var(--surface);border-radius:10px;padding:16px;min-width:0}
+table,.tile b{font-variant-numeric:tabular-nums}
 .tile b{display:block;font-size:26px;font-weight:650;line-height:1.2}
 .tile span{color:var(--text2);font-size:13px}
-.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-bottom:12px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));gap:12px;margin-bottom:12px}
 svg{display:block;width:100%;height:auto;overflow:visible}
 svg text{fill:var(--text2);font-size:11px}
 .bar{fill:var(--series)}.gl{stroke:var(--grid);stroke-width:1}
@@ -944,7 +954,7 @@ def project_section(root: Path, cfg: dict, agg: dict, ndays: int, heading: bool)
         "".join(f'<li class="done">{esc(g)}</li>' for g in done_g[-5:])
     entries = read_entries(root)
     log = "".join(f'<div class="log">{md_lite(entries[d])}</div>'
-                  for d in sorted(entries, reverse=True)[:3])
+                  for d in sorted(entries, reverse=True)[:7])
     o.append('<div class="grid2">'
              f'<div class="card"><h3>Goals &amp; next steps — {len(open_g)} open, {len(done_g)} done</h3>'
              + (f"<ul>{goals}</ul>" if goals else '<p class="empty">No goals recorded yet.</p>')
@@ -1000,19 +1010,44 @@ def cmd_dashboard(args) -> None:
                     '<th>Active days</th><th>Sessions</th><th>Tokens</th><th>Last active</th></tr>'
                     f"{rows}</table></div>")
     body += [project_section(r, c, a, args.days, multi) for r, c, a in projects]
-    page = (f'<!doctype html><html lang="en"><meta charset="utf-8">'
-            f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f"<title>{esc(title)} — tracker</title><style>{DASH_CSS}</style>"
-            f'<main>{"".join(body)}</main><div id="tip"></div><script>{DASH_JS}</script></html>')
+    fonts = ('<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+             'family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap">')
+    name = "All Projects" if multi else title
+    content = (f"<title>{esc(name)} Tracker</title>"
+               '<meta name="claude:viewport-fit-sides" content="cover">'
+               f"{fonts}<style>{DASH_CSS}</style>"
+               f'<main>{"".join(body)}</main><div id="tip"></div><script>{DASH_JS}</script>')
+    if args.artifact:
+        # Claude's Artifact tool wraps the page in its own document skeleton
+        page, fname = content, "dashboard.artifact.html"
+    else:
+        page, fname = ('<!doctype html><html lang="en"><meta charset="utf-8">'
+                       '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                       f"{content}</html>"), "dashboard.html"
     if args.out:
         out = Path(args.out)
     elif multi:
-        out = claude_home() / "project-tracker" / "dashboard.html"
+        out = claude_home() / "project-tracker" / fname
     else:
-        out = projects[0][0] / TRACK_DIR / "dashboard.html"
+        out = projects[0][0] / TRACK_DIR / fname
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(page)
     print(f"Dashboard written to {out}")
+    if args.artifact:
+        url = None if multi else projects[0][1].get("artifact_url")
+        print(f"Existing artifact to update: {url}" if url else
+              "No artifact URL stored yet: publish this file as a new artifact, then save its "
+              "link with `artifact-url <url>`.")
+
+
+def cmd_artifact_url(args) -> None:
+    root, cfg = load(args)
+    if args.url:
+        if not re.match(r"^https://claude\.ai/\S+$", args.url):
+            die("expected a https://claude.ai/... artifact link")
+        cfg["artifact_url"] = args.url
+        write_json(root / TRACK_DIR / "config.json", cfg)
+    print(cfg.get("artifact_url") or "No artifact URL stored for this project.")
 
 
 def main() -> None:
@@ -1057,7 +1092,12 @@ def main() -> None:
     p.add_argument("--all", action="store_true", help="include every tracked project")
     p.add_argument("--days", type=int, default=30)
     p.add_argument("--out", help="output file (default: .project-tracker/dashboard.html)")
+    p.add_argument("--artifact", action="store_true",
+                   help="write the page in the form Claude's Artifact tool publishes")
     p.set_defaults(fn=cmd_dashboard)
+    p = sub.add_parser("artifact-url", help="show or store this project's Claude Artifact link")
+    p.add_argument("url", nargs="?")
+    p.set_defaults(fn=cmd_artifact_url)
     sub.add_parser("projects", help="overview of all tracked projects on this machine") \
         .set_defaults(fn=cmd_projects)
 

@@ -5,7 +5,7 @@ A Claude skill that keeps track of your projects. For each project it maintains,
 - **`SUMMARY.md`** — Claude usage (sessions, prompts, tokens per model) and time spent working, in total and per day
 - **`CHANGELOG.md`** — a daily build/change log; each day's first session writes up the previous day
 - **`GOALS.md`** — goals and next steps, ticked off as the daily log records them done
-- **`dashboard.html`** — charts of time and usage per day, on request
+- **A Claude Artifact** — a private page on claude.ai per project showing all of the above with charts, refreshed whenever the daily log is written
 - `sessions/` / `config.json` — the underlying records and settings
 
 ## Install
@@ -38,7 +38,7 @@ python3 project-tracker/scripts/tracker.py --help
 1. Install as above, then open a project (a git repository) in Claude Code and say **"start tracking this project"**. Claude asks for your timezone once.
 2. Work as usual for a bit, then ask **"how much time and usage so far?"** — the numbers should match your session.
 3. Ask **"log today's work"** and read `.project-tracker/CHANGELOG.md`.
-4. Ask **"add a goal: …"**, then **"show me the dashboard"** and open `.project-tracker/dashboard.html`.
+4. Ask **"add a goal: …"**, then **"show me the dashboard"** and open the artifact link Claude gives you.
 5. Next day, start a new session: yesterday's changelog entry should be written up within the first exchange, and `git log` should show `chore(tracker): update project tracking` commits.
 
 To stop tracking a project, delete `.project-tracker/`, `.claude/skills/project-tracker/` and the two `tracker.py` hook entries in `.claude/settings.json`.

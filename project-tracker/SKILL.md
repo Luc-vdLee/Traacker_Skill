@@ -1,6 +1,6 @@
 ---
 name: project-tracker
-description: Tracks software projects worked on with Claude Code - Claude usage (sessions, prompts, tokens per model), time spent working, a daily build/change log covering the previous day, a goals/next-steps list, and a visual dashboard. Use this skill whenever the user wants to start tracking a project, asks how much time or how many tokens/Claude usage a project has consumed, asks "what did I do yesterday / this week" on a project, wants a changelog, build log, work log, timesheet, progress summary or dashboard for a project, mentions project goals, next steps or what's left to do, wants an overview across their projects, or when a session-start note mentions "[project-tracker]" draft changelog entries that need writing up.
+description: Tracks software projects worked on with Claude Code - Claude usage (sessions, prompts, tokens per model), time spent working, a daily build/change log covering the previous day, a goals/next-steps list, and a visual dashboard published as a Claude Artifact per project. Use this skill whenever the user wants to start tracking a project, asks how much time or how many tokens/Claude usage a project has consumed, asks "what did I do yesterday / this week" on a project, wants a changelog, build log, work log, timesheet, progress summary or dashboard for a project, mentions project goals, next steps or what's left to do, wants an overview across their projects, or when a session-start note mentions "[project-tracker]" draft changelog entries that need writing up.
 ---
 
 # Project Tracker
@@ -14,7 +14,7 @@ Keeps these per project, stored in `<project>/.project-tracker/`:
 | `GOALS.md` | Checklist of goals and next steps (Now / Later / Done) | **you**, with the user |
 | `sessions/*.json` | One small record per Claude session backing the numbers | script |
 | `config.json` | Name, idle threshold, timezone, auto-commit, optional pricing | script / user |
-| `dashboard.html` | Visual dashboard, generated on request (git-ignored) | script |
+| `dashboard*.html` | The dashboard page, generated for the project's Claude Artifact or local viewing (git-ignored) | script |
 
 Everything mechanical is done by `scripts/tracker.py` (Python 3.9+, standard library only). Run it as `python3 <this skill's directory>/scripts/tracker.py <command>` from inside the project (or pass `--project <dir>` before the command). Don't compute usage or time by hand — the script's numbers are deduplicated and consistent; hand counts won't be.
 
@@ -36,7 +36,8 @@ Knowing this lets you answer "why does it say X?" honestly.
 | `report [--days N] [--json]` | Print the usage/time report (syncs first). |
 | `digest [--date D]` | Raw material for one day's changelog entry: commits, files touched, the prompts given to Claude, existing entry. `D` is `YYYY-MM-DD`, `today` or `yesterday` (default). |
 | `changelog-write [--date D]` | Write or replace that day's entry. Body on stdin (or `--file`). The heading and stats line are added for you. |
-| `dashboard [--all] [--days 30] [--out FILE]` | Write a self-contained HTML dashboard: time and tokens per day, goals, recent changelog. `--all` covers every tracked project on this machine. |
+| `dashboard [--artifact] [--all] [--days 30] [--out FILE]` | Write the dashboard page: time and tokens per day, goals, recent changelog. `--artifact` writes it for publishing as the project's Claude Artifact. |
+| `artifact-url [URL]` | Show, or store, the link of the project's Claude Artifact. |
 | `commit` | Sync, then git-commit `.project-tracker/` and nothing else. |
 | `projects` | Table of every tracked project on this machine. |
 | `install-hooks` | (Re)install the hooks. |
@@ -47,7 +48,8 @@ The user works both locally and in cloud sessions, so set projects up to work in
 
 1. Run `init --vendor --timezone <IANA zone>`. Vendoring puts the skill and its hooks inside the repository (`.claude/skills/project-tracker/`, `.claude/settings.json`), which is the only way a cloud session — a fresh container with nothing but the repo — can run them. Set the timezone explicitly: cloud containers run in UTC, and "yesterday" has to be cut at the user's midnight on every machine. If you don't know their zone, ask once; it is stored in `config.json` for good.
 2. Commit what was created: `.project-tracker/`, `.claude/skills/project-tracker/` and `.claude/settings.json`. Tracking data is always committed in this user's projects — it is how history survives transcript cleanup, follows the repo between machines, and exists at all in cloud sessions. `sessions/*.json` hold only counts and timestamps, never prompt text.
-3. Tell the user briefly what now happens automatically (next section), and ask whether they have goals or next steps to record in `GOALS.md`.
+3. Publish the project's Claude Artifact (see "The project's Claude Artifact") and give the user its link.
+4. Tell the user briefly what now happens automatically (next section), and ask whether they have goals or next steps to record in `GOALS.md`.
 
 ## What runs automatically, and committing
 
@@ -69,6 +71,7 @@ The `SessionStart` hook guarantees an entry exists by drafting one from git comm
 1. `digest --date <day>` to see commits, files and what the user asked for that day. If the commits are terse, look at the actual diffs (`git show --stat <hash>`) for the ones that matter.
 2. Write the entry body and pipe it to `changelog-write --date <day>`.
 3. Update `GOALS.md` if needed, then run `commit`.
+4. Refresh the project's Claude Artifact (see below).
 
 Do this near the start of the session, quickly and without ceremony — a one-line mention that yesterday's log was written is enough. The user came to do something else; finish this in the background of their request, don't make them wait for it or ask permission each day.
 
@@ -104,14 +107,28 @@ The user can also ask for an entry on demand ("log today's work"): use `--date t
 
 It is the user's list: record what they say they want, and suggest additions rather than inventing goals for them. Open/done counts appear in `SUMMARY.md` and the dashboard.
 
-## Dashboard
+## The project's Claude Artifact
 
-`dashboard` writes `.project-tracker/dashboard.html` (with `--all`, an all-projects page under `~/.claude/project-tracker/` unless `--out` is given). It is one self-contained file that works offline in light and dark mode. Generate it when the user asks to *see* progress, then give them the file — in a cloud session, write it inside the project directory so they can open it. It is a snapshot, so regenerate rather than reuse an old one.
+Each tracked project has one private Claude Artifact — a page on claude.ai — that is the readable home of its tracked info: usage, time, goals and the recent changelog. The files in `.project-tracker/` remain the source of truth; the artifact is the view the user actually opens, from any device. Its link is stored in `config.json` (`artifact_url`) so that every session, on any machine, updates the same page instead of creating a new one.
+
+Refresh it whenever the tracked info has meaningfully changed: after writing a daily changelog entry (so it is current at least once per worked day), after editing goals, and whenever the user asks to see the tracker or dashboard.
+
+1. Run `dashboard --artifact`. It writes `.project-tracker/dashboard.artifact.html` in the form the Artifact tool expects and prints the stored link, if any.
+2. **No link yet** — publish the file as a new artifact (icon `chart`, a one-sentence description naming the project), then store the link with `artifact-url <url>` and run `commit` so other machines find it.
+3. **Link exists** — update that artifact in place: read it first with the Artifact tool (`action: read`, the tool refuses to overwrite a page the session hasn't seen), then publish the file with that `url`. Don't publish without the `url`; that would create a second page and orphan the link the user has bookmarked.
+4. Give the user the link, in one line.
+
+If the stored link can't be read or updated (deleted, or owned by a different account), tell the user rather than silently creating a replacement. If this session has no Artifact tool, skip the artifact without fuss — run plain `dashboard` if they want to see something, and the next session that has the tool will bring the artifact up to date.
+
+The artifact is private until the user shares it. It contains the changelog and goals, so sharing is their decision — don't change visibility or suggest it is public.
+
+`dashboard` without `--artifact` writes the same page as a standalone `dashboard.html` for opening locally. `dashboard --all` covers every tracked project on this machine in one page (written under `~/.claude/project-tracker/` unless `--out` is given; in a cloud session pass `--out` inside the project so the user can open it). An all-projects page can be published as its own artifact on request, but its link isn't stored anywhere — ask the user for it when updating.
 
 ## Answering questions
 
 - "How much time / usage on this project?" → `report`, then answer in a sentence or two with the relevant figures; show the table only if they want the breakdown.
 - "What did I do yesterday / last week?" → read `CHANGELOG.md` (write up any drafts first); pair with `report --days 7` if they want hours.
+- "Show me the tracker / dashboard" → refresh the project's artifact and give the link.
 - "How are all my projects doing?" → `projects`, or `dashboard --all` for the visual version. The registry is per machine (and empty in a fresh cloud container), so only projects opened on this machine are listed — say so if the list looks short.
 - "What's left / what's next?" → `GOALS.md`, plus Open threads from the latest changelog entries.
 - Time looks too low or high → explain the idle threshold and offer `init --idle-minutes <n>`. It applies to sessions whose transcripts are still on disk; older stored sessions keep the blocks computed at the time.
