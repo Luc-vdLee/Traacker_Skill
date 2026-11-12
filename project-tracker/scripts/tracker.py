@@ -580,7 +580,9 @@ def install_hooks(root: Path, script: Path | None = None) -> Path:
         groups = [g for g in hooks.get(event, [])
                   if not any("tracker.py" in h.get("command", "") and " hook " in h.get("command", "")
                              for h in g.get("hooks", []))]
-        groups.append({"hooks": [{"type": "command", "command": f"{cmd} hook {arg}",
+        # fall back to `python` where `python3` isn't a command (common on Windows)
+        full = f"{cmd} hook {arg} || {cmd.replace('python3', 'python', 1)} hook {arg}"
+        groups.append({"hooks": [{"type": "command", "command": full,
                                   "timeout": 30}]})
         hooks[event] = groups
     write_json(path, settings)

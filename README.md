@@ -33,6 +33,16 @@ Or run the script directly:
 python3 project-tracker/scripts/tracker.py --help
 ```
 
+## Try it out
+
+1. Install as above, then open a project (a git repository) in Claude Code and say **"start tracking this project"**. Claude asks for your timezone once.
+2. Work as usual for a bit, then ask **"how much time and usage so far?"** — the numbers should match your session.
+3. Ask **"log today's work"** and read `.project-tracker/CHANGELOG.md`.
+4. Ask **"add a goal: …"**, then **"show me the dashboard"** and open `.project-tracker/dashboard.html`.
+5. Next day, start a new session: yesterday's changelog entry should be written up within the first exchange, and `git log` should show `chore(tracker): update project tracking` commits.
+
+To stop tracking a project, delete `.project-tracker/`, `.claude/skills/project-tracker/` and the two `tracker.py` hook entries in `.claude/settings.json`.
+
 ## How it works
 
 Usage and time are read from Claude Code's own session transcripts, so nothing has to be logged by hand. Time counts stretches of activity; gaps longer than 15 minutes (configurable) are treated as breaks. Results are stored as one small file per session in `.project-tracker/sessions/`, so history survives after Claude Code cleans up old transcripts and merges cleanly when you work from several machines. See `project-tracker/SKILL.md` for details.
