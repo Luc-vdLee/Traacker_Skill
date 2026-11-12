@@ -32,7 +32,7 @@ Knowing this lets you answer "why does it say X?" honestly.
 | Command | Use |
 |---|---|
 | `init --vendor [--name N] [--timezone Europe/Amsterdam] [--idle-minutes 15] [--no-hooks] [--no-auto-commit]` | Start tracking the current project (git root). Safe to re-run to change settings. `--vendor` copies this skill into `<project>/.claude/skills/` so it also works in cloud sessions. |
-| `sync` | Refresh `data.json` and `SUMMARY.md`; draft entries for recent worked days missing from the changelog. |
+| `sync` | Refresh `sessions/` and `SUMMARY.md`; draft entries for recent worked days missing from the changelog. |
 | `report [--days N] [--json]` | Print the usage/time report (syncs first). |
 | `digest [--date D]` | Raw material for one day's changelog entry: commits, files touched, the prompts given to Claude, existing entry. `D` is `YYYY-MM-DD`, `today` or `yesterday` (default). |
 | `changelog-write [--date D]` | Write or replace that day's entry. Body on stdin (or `--file`). The heading and stats line are added for you. |
