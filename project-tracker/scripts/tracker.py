@@ -114,15 +114,73 @@ def fmt_n(n: float) -> str:
 
 # ---------------------------------------------------------------- transcripts
 
-def transcript_files(root: Path) -> list[Path]:
+def norm_path(p) -> str:
+    """Comparable form of a path: absolute, symlinks resolved, '/' separators, and
+    case-folded where the file system ignores case (Windows, macOS)."""
+    s = str(p)
+    try:
+        s = os.path.realpath(s)
+    except (OSError, ValueError):
+        s = os.path.abspath(s)
+    s = s.replace("\\", "/").rstrip("/") or "/"
+    return s.lower() if os.name == "nt" or sys.platform == "darwin" else s
+
+
+def path_variants(root: Path) -> set[str]:
+    return {str(root), os.path.abspath(str(root)), os.path.realpath(str(root))}
+
+
+def under(cwd: str, root_n: str) -> bool:
+    c = norm_path(cwd)
+    return c == root_n or c.startswith(root_n.rstrip("/") + "/")
+
+
+def first_cwd(d: Path) -> str | None:
+    """The working directory recorded in a transcript folder (first one found)."""
+    for f in sorted(d.glob("*.jsonl"))[:3]:
+        try:
+            with open(f, errors="replace") as fh:
+                for i, line in enumerate(fh):
+                    if i > 50:
+                        break
+                    try:
+                        cwd = json.loads(line).get("cwd")
+                    except (ValueError, AttributeError):
+                        continue
+                    if cwd:
+                        return cwd
+        except OSError:
+            continue
+    return None
+
+
+def transcript_dirs(root: Path) -> list[Path]:
+    """Claude Code keeps a project's transcripts in ~/.claude/projects/<encoded path>.
+    Match on the encoded name (ignoring case, and the truncation Claude Code applies
+    to long paths), and also on the working directory recorded inside, which catches
+    case, drive-letter, symlink and OneDrive differences between the two."""
     base = claude_home() / "projects"
-    enc = re.sub(r"[^A-Za-z0-9]", "-", str(root))
-    files: list[Path] = []
-    if base.is_dir():
-        for d in base.iterdir():
-            if d.is_dir() and (d.name == enc or d.name.startswith(enc + "-")):
-                files.extend(d.rglob("*.jsonl"))
-    return sorted(files)
+    if not base.is_dir():
+        return []
+    encs = {re.sub(r"[^A-Za-z0-9]", "-", v).lower() for v in path_variants(root)}
+    root_n = norm_path(root)
+    out = []
+    for d in base.iterdir():
+        if not d.is_dir():
+            continue
+        name = d.name.lower()
+        if any(name == e or name.startswith(e + "-") or (len(e) > 200 and name.startswith(e[:200]))
+               for e in encs):
+            out.append(d)
+            continue
+        cwd = first_cwd(d)
+        if cwd and under(cwd, root_n):
+            out.append(d)
+    return sorted(out)
+
+
+def transcript_files(root: Path) -> list[Path]:
+    return sorted(f for d in transcript_dirs(root) for f in d.rglob("*.jsonl"))
 
 
 def parse_ts(s) -> float | None:
@@ -157,7 +215,8 @@ def scan(root: Path, cfg: dict) -> tuple[dict, list[dict]]:
     stamps: dict[str, set] = {}
     msgs: dict[str, dict] = {}       # assistant message id -> usage record
     prompts: dict[str, dict] = {}    # uuid -> prompt
-    root_s = str(root)
+    root_n = norm_path(root)
+    seen_cwd: dict[str, bool] = {}
     for f in transcript_files(root):
         try:
             fh = open(f, errors="replace")
@@ -173,8 +232,11 @@ def scan(root: Path, cfg: dict) -> tuple[dict, list[dict]]:
                 if kind not in ("user", "assistant"):
                     continue
                 cwd = e.get("cwd")
-                if cwd and not (cwd == root_s or cwd.startswith(root_s + os.sep)):
-                    continue
+                if cwd:
+                    if cwd not in seen_cwd:
+                        seen_cwd[cwd] = under(cwd, root_n)
+                    if not seen_cwd[cwd]:
+                        continue
                 ts = parse_ts(e.get("timestamp"))
                 sid = e.get("sessionId") or f.stem
                 if ts is None:
@@ -665,6 +727,9 @@ def cmd_init(args) -> None:
     if not args.no_hooks:
         print(f"Hooks installed in {install_hooks(root, script)}")
     print(f"Sessions found so far: {len(data['sessions'])}")
+    if not data["sessions"]:
+        print("No Claude Code sessions found for this project yet. If you have already "
+              "worked on it with Claude Code, run `doctor` to see why.")
 
 
 def cmd_sync(args) -> None:
@@ -828,6 +893,42 @@ def cmd_commit(args) -> None:
     root, cfg = load(args)
     sync(root, cfg)
     print("Committed tracker files." if commit_tracking(root) else "Nothing to commit.")
+
+
+def cmd_doctor(args) -> None:
+    """Explain where usage and time come from, and why they might be missing."""
+    root = find_root(Path(args.project or os.getcwd()), must_exist=False)
+    cfg = read_json(root / TRACK_DIR / "config.json", None)
+    home, base = claude_home(), claude_home() / "projects"
+    out = [f"Python:            {sys.version.split()[0]} on {sys.platform}",
+           f"Project root:      {root}",
+           f"  compared as:     {norm_path(root)}",
+           f"Tracked:           {'yes' if cfg is not None else 'NO - run init first'}",
+           f"Timezone:          {(cfg or {}).get('timezone') or 'system local'}",
+           f"Claude config dir: {home}"
+           + ("  (from CLAUDE_CONFIG_DIR)" if os.environ.get("CLAUDE_CONFIG_DIR") else ""),
+           f"Transcripts dir:   {base} ({'exists' if base.is_dir() else 'MISSING'})"]
+    dirs = transcript_dirs(root)
+    files = [f for d in dirs for f in d.rglob("*.jsonl")]
+    out.append(f"Matching folders:  {len(dirs)}")
+    out += [f"  - {d.name} ({sum(1 for _ in d.rglob('*.jsonl'))} transcript file(s))" for d in dirs]
+    if base.is_dir() and not dirs:
+        others = sorted(base.iterdir(), key=lambda d: d.stat().st_mtime, reverse=True)[:8]
+        out.append("  No folder matched. Most recently used transcript folders, with the "
+                   "directory each was recorded in:")
+        out += [f"  - {d.name}  ->  {first_cwd(d) or '?'}" for d in others if d.is_dir()]
+    if cfg is not None:
+        sessions, prompts = scan(root, cfg)
+        data, _ = sync(root, cfg)
+        t = aggregate(data, cfg)["total"]
+        out += [f"Transcript files:  {len(files)}",
+                f"Sessions in transcripts now: {len(sessions)} ({len(prompts)} prompt(s))",
+                f"Stored sessions:   {len(data['sessions'])}",
+                f"Totals:            {fmt_dur(t['seconds'])}, {fmt_n(tokens_total(t))} tokens"]
+        if files and not sessions:
+            out.append("  Transcripts were found but none had entries for this directory; "
+                       "check the 'compared as' path against the folders above.")
+    print("\n".join(out))
 
 
 def cmd_projects(args) -> None:
@@ -1176,6 +1277,8 @@ def main() -> None:
     p.add_argument("--days", type=int, default=30)
     p.add_argument("--out", help="output file (default: .project-tracker/dashboard.html)")
     p.set_defaults(fn=cmd_dashboard)
+    sub.add_parser("doctor", help="show where usage/time data is read from and why it may be missing") \
+        .set_defaults(fn=cmd_doctor)
     sub.add_parser("projects", help="overview of all tracked projects on this machine") \
         .set_defaults(fn=cmd_projects)
 

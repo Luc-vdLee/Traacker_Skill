@@ -22,7 +22,7 @@ Everything mechanical is done by `scripts/tracker.py` (Python 3.9+, standard lib
 
 Knowing this lets you answer "why does it say X?" honestly.
 
-- **Claude usage** comes from Claude Code's session transcripts (`~/.claude/projects/…`) for this project directory: tokens from each assistant response (input, output, cache write, cache read), grouped by model and day.
+- **Claude usage** comes from Claude Code's session transcripts (`~/.claude/projects/…`) for this project directory (matched by folder name, ignoring case, and by the working directory recorded inside, so path differences such as drive-letter case, symlinks or OneDrive aliases don't hide them): tokens from each assistant response (input, output, cache write, cache read), grouped by model and day.
 - **Time spent** is measured from transcript activity: consecutive events less than the idle threshold apart (default 15 min) form a work block; longer gaps are treated as a break. Parallel sessions overlap rather than double-count. It is time spent working *with Claude* on the project — work done entirely outside Claude Code isn't visible, so describe it as that rather than as total hours.
 - **Persistence**: Claude Code eventually deletes old transcripts, and cloud sessions lose them when the container ends. Each sync folds what it sees into `sessions/` and never drops sessions it can no longer see, so `.project-tracker/` is the durable record. That is why it is committed (see below).
 - **Cost** is only shown if the user has put rates in `config.json` under `pricing` (`{"<model-name-substring>": {"input": …, "output": …, "cache_write": …, "cache_read": …}}`, dollars per million tokens). Don't fill in rates from memory — ask the user or look up current pricing — and note that on a subscription plan this is an API-equivalent figure, not a bill.
@@ -41,6 +41,7 @@ Knowing this lets you answer "why does it say X?" honestly.
 | `dashboard [--all] [--days 30] [--out FILE]` | Write a self-contained HTML dashboard: time and tokens per day, goals, recent changelog. `--all` covers every tracked project on this machine. |
 | `commit` | Sync, then git-commit `.project-tracker/` and nothing else. |
 | `projects` | Table of every tracked project on this machine. |
+| `doctor` | Shows where usage and time are read from: the Claude config dir, which transcript folders matched this project, and what was found. Use it whenever the numbers are zero or look wrong. |
 | `install-hooks` | (Re)install the hooks. |
 
 ## Starting to track a project
@@ -144,4 +145,5 @@ It is the user's list: record what they say they want, and suggest additions rat
 - "What did I do yesterday / last week?" → read `CHANGELOG.md` (write up any drafts first); pair with `report --days 7` if they want hours.
 - "How are all my projects doing?" → `projects`, or `dashboard --all` for the visual version. The registry is per machine (and empty in a fresh cloud container), so only projects opened on this machine are listed — say so if the list looks short.
 - "What's left / what's next?" → `GOALS.md`, plus Open threads from the latest changelog entries.
+- Time and tokens are zero (or far too low) although the user has worked on the project with Claude Code → run `doctor` and read it with them. It shows whether the transcripts folder exists, which folders matched and, when none did, the directories the recent transcripts were recorded in, so you can see the mismatch (another config dir via `CLAUDE_CONFIG_DIR`, the project opened from a different path, or work done outside Claude Code, e.g. in the claude.ai chat, which leaves no transcripts here).
 - Time looks too low or high → explain the idle threshold and offer `init --idle-minutes <n>`. It applies to sessions whose transcripts are still on disk; older stored sessions keep the blocks computed at the time.
