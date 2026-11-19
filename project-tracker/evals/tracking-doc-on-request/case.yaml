@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: tracking-doc-on-request
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  SUMMARY.md holds a short written summary of TrailMix (what it is, what's built, what's next) above correct totals (2h 48m, 1.0M tokens), and the summary survives a later sync.

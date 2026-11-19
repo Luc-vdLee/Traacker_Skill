@@ -1,6 +1,6 @@
 ---
 name: project-tracker
-description: Tracks software projects worked on with Claude Code - Claude usage (sessions, prompts, tokens per model), time spent working, a daily build/change log covering the previous day, a goals/next-steps list, and a visual dashboard. Use this skill whenever the user wants to start tracking a project, asks how much time or how many tokens/Claude usage a project has consumed, asks "what did I do yesterday / this week" on a project, wants a changelog, build log, work log, timesheet, progress summary or dashboard for a project, mentions project goals, next steps or what's left to do, wants an overview across their projects, or when a session-start note mentions "[project-tracker]" draft changelog entries that need writing up.
+description: Tracks software projects worked on with Claude Code - a tracking document (SUMMARY.md) with a written summary of the work done plus total Claude usage (sessions, prompts, tokens per model) and time spent, a daily build/change log covering the previous day, a goals/next-steps list, and a visual dashboard. Use this skill whenever the user wants to start tracking a project, asks how much time or how many tokens/Claude usage a project has consumed, wants a tracking document, status report or overview of what a project is and what has been done on it, asks "what did I do yesterday / this week" on a project, wants a changelog, build log, work log, timesheet, progress summary or dashboard for a project, mentions project goals, next steps or what's left to do, wants an overview across their projects, or when a session-start note mentions "[project-tracker]" draft changelog entries or a work summary that need writing up.
 ---
 
 # Project Tracker
@@ -9,7 +9,7 @@ Keeps these per project, stored in `<project>/.project-tracker/`:
 
 | File | What it holds | Who writes it |
 |---|---|---|
-| `SUMMARY.md` | Claude usage (sessions, prompts, tokens by model) and time spent, in total and per day | script |
+| `SUMMARY.md` | **The tracking document**: a short written summary of the work done on the project, then total time and Claude usage (sessions, prompts, tokens), then per-model and per-day breakdowns | script writes the numbers, **you** write the summary |
 | `CHANGELOG.md` | One entry per worked day, newest first: what was built or changed | script drafts, **you** write the real entry |
 | `GOALS.md` | Checklist of goals and next steps (Now / Later / Done) | **you**, with the user |
 | `sessions/*.json` | One small record per Claude session backing the numbers | script |
@@ -36,6 +36,8 @@ Knowing this lets you answer "why does it say X?" honestly.
 | `report [--days N] [--json]` | Print the usage/time report (syncs first). |
 | `digest [--date D]` | Raw material for one day's changelog entry: commits, files touched, the prompts given to Claude, existing entry. `D` is `YYYY-MM-DD`, `today` or `yesterday` (default). |
 | `changelog-write [--date D]` | Write or replace that day's entry. Body on stdin (or `--file`). The heading and stats line are added for you. |
+| `summary-digest` | Raw material for the project-wide work summary: current summary, totals, README opening, recent commits, goals, the latest changelog entries in full and one line per older day. |
+| `summary-write` | Write or replace the work summary at the top of `SUMMARY.md`. Body on stdin (or `--file`); the heading and date are added for you, and it survives every later `sync`. |
 | `dashboard [--all] [--days 30] [--out FILE]` | Write a self-contained HTML dashboard: time and tokens per day, goals, recent changelog. `--all` covers every tracked project on this machine. |
 | `commit` | Sync, then git-commit `.project-tracker/` and nothing else. |
 | `projects` | Table of every tracked project on this machine. |
@@ -47,11 +49,12 @@ The user works both locally and in cloud sessions, so set projects up to work in
 
 1. Run `init --vendor --timezone <IANA zone>`. Vendoring puts the skill and its hooks inside the repository (`.claude/skills/project-tracker/`, `.claude/settings.json`), which is the only way a cloud session — a fresh container with nothing but the repo — can run them. Set the timezone explicitly: cloud containers run in UTC, and "yesterday" has to be cut at the user's midnight on every machine. If you don't know their zone, ask once; it is stored in `config.json` for good.
 2. Commit what was created: `.project-tracker/`, `.claude/skills/project-tracker/` and `.claude/settings.json`. Tracking data is always committed in this user's projects — it is how history survives transcript cleanup, follows the repo between machines, and exists at all in cloud sessions. `sessions/*.json` hold only counts and timestamps, never prompt text.
-3. Tell the user briefly what now happens automatically (next section), and ask whether they have goals or next steps to record in `GOALS.md`.
+3. If the project already has history (commits, a README), write the first work summary (see "The work summary") so `SUMMARY.md` is complete from day one, then `commit`.
+4. Tell the user briefly what now happens automatically (next section), and ask whether they have goals or next steps to record in `GOALS.md`.
 
 ## What runs automatically, and committing
 
-- **SessionStart hook**: syncs, drafts changelog entries for recent worked days that lack one, commits `.project-tracker/`, and tells you if drafts need writing up.
+- **SessionStart hook**: syncs, drafts changelog entries for recent worked days that lack one, commits `.project-tracker/`, and tells you if drafts (or a missing work summary) need writing up.
 - **SessionEnd hook**: syncs so the session's usage is captured, and commits `.project-tracker/`.
 
 The hook commits (`chore(tracker): update project tracking`) include only paths under `.project-tracker/` — never the user's other staged or unstaged work — and are never pushed by the hook. Turn them off with `init --no-auto-commit`.
@@ -68,7 +71,8 @@ The `SessionStart` hook guarantees an entry exists by drafting one from git comm
 
 1. `digest --date <day>` to see commits, files and what the user asked for that day. If the commits are terse, look at the actual diffs (`git show --stat <hash>`) for the ones that matter.
 2. Write the entry body and pipe it to `changelog-write --date <day>`.
-3. Update `GOALS.md` if needed, then run `commit`.
+3. Update `GOALS.md` if needed.
+4. Refresh the work summary in `SUMMARY.md` (next section) so it includes what you just logged, then run `commit`. Once per session is enough, after all drafts are written.
 
 Do this near the start of the session, quickly and without ceremony — a one-line mention that yesterday's log was written is enough. The user came to do something else; finish this in the background of their request, don't make them wait for it or ask permission each day.
 
@@ -94,6 +98,31 @@ Write for the user a month from now: outcomes over mechanics ("Login form valida
 
 The user can also ask for an entry on demand ("log today's work"): use `--date today`. Re-running `changelog-write` for a day replaces that entry, so today's can be redone tomorrow when the day is complete.
 
+## The work summary
+
+`SUMMARY.md` is the one document that answers "where does this project stand?": a written summary of the work at the top, with total time and token usage right under it. The numbers are regenerated by every `sync`; the summary is yours to write, and the script keeps it intact (between `<!-- work-summary:start/end -->` markers) — so always write it with `summary-write` rather than editing `SUMMARY.md` by hand, which `sync` would overwrite.
+
+Write or refresh it:
+- after writing up the day's changelog entries (step 4 above), which normally means once a day;
+- when you start tracking a project that already has history;
+- when the hook note says there is none yet, or the user asks ("update the project summary", "give me a tracking doc").
+
+Process: run `summary-digest`, read the current summary and the changelog, and write the new one so it covers the whole project as it stands now — don't just append yesterday's bullet. Pipe it to `summary-write`, then `commit`.
+
+Format (aim for 80–200 words; it's a summary, the changelog has the detail):
+
+```markdown
+One short paragraph: what the project is and who/what it's for, and where it stands now.
+
+**Built so far**
+- 3–7 bullets of capabilities that exist, as outcomes ("Users can upload GPX tracks and see an elevation chart"), grouping related work. Not a list of commits or days.
+
+**In progress / next**
+- What's half-done (from the latest Open threads) and the main open goals.
+```
+
+Leave the totals out of the prose — they sit right below it and stay current, while numbers in the text would go stale. Write from what the digest and repository support, as in the changelog, and say less rather than guess.
+
 ## Goals and next steps
 
 `GOALS.md` is a plain checklist with three sections — **Now**, **Later**, **Done** — that you maintain by editing the file directly:
@@ -111,6 +140,7 @@ It is the user's list: record what they say they want, and suggest additions rat
 ## Answering questions
 
 - "How much time / usage on this project?" → `report`, then answer in a sentence or two with the relevant figures; show the table only if they want the breakdown.
+- "Give me an overview / a tracking document / where does this project stand?" → make sure the work summary is current (write it up if it's missing or older than the latest changelog entry), then point them to `SUMMARY.md` and give the gist: the summary's first paragraph plus total time and tokens.
 - "What did I do yesterday / last week?" → read `CHANGELOG.md` (write up any drafts first); pair with `report --days 7` if they want hours.
 - "How are all my projects doing?" → `projects`, or `dashboard --all` for the visual version. The registry is per machine (and empty in a fresh cloud container), so only projects opened on this machine are listed — say so if the list looks short.
 - "What's left / what's next?" → `GOALS.md`, plus Open threads from the latest changelog entries.

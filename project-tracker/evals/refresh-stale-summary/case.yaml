@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: refresh-stale-summary
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  The SUMMARY.md work summary is replaced (one block, dated today) and now covers GPX upload, user accounts and the favorites work in progress, and survives a later sync.

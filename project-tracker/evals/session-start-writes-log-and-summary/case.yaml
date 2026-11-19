@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: session-start-writes-log-and-summary
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  Yesterday's draft changelog entry is written up properly, the SUMMARY.md work summary is written to include it, and the user gets a short answer about the last session.

@@ -23,6 +23,9 @@ BACKFILL_DAYS = 14
 TOKEN_KEYS = ("input", "output", "cache_write", "cache_read")
 AUTO_MARK = "<!-- auto-generated draft -->"
 HEADING_RE = re.compile(r"^## (\d{4}-\d{2}-\d{2})\b.*$", re.M)
+SUM_START, SUM_END = "<!-- work-summary:start -->", "<!-- work-summary:end -->"
+SUM_BLOCK_RE = re.compile(re.escape(SUM_START) + r"(.*?)" + re.escape(SUM_END), re.S)
+SUM_DATE_RE = re.compile(r"^_Written (\d{4}-\d{2}-\d{2})[^\n]*_\s*$", re.M)
 
 
 # ---------------------------------------------------------------- basics
@@ -378,14 +381,20 @@ def stats_line(v: dict, priced: bool = False) -> str:
     return s
 
 
-def render_report(cfg: dict, agg: dict, days: int, goals=None) -> str:
+def render_report(cfg: dict, agg: dict, days: int, goals=None, summary=None) -> str:
     t, priced = agg["total"], agg["priced"]
     cost_h, cost_s = (" Est. cost |", "---:|") if priced else ("", "")
-    out = [f"# {cfg.get('name', 'Project')} — tracker summary", "",
+    span = (f" ({min(agg['days'])} → {max(agg['days'])})" if agg["days"] else "")
+    out = [f"# {cfg.get('name', 'Project')} — project tracking", "",
            f"_Updated {dt.datetime.now().astimezone():%Y-%m-%d %H:%M %Z}. "
            f"Idle gaps over {cfg.get('idle_minutes', DEFAULT_IDLE_MINUTES)} min are not counted as work time._",
-           "", "## Totals", "",
-           f"- **Time spent:** {fmt_dur(t['seconds'])} across {len(agg['days'])} active day(s)",
+           "", "## Work summary", ""]
+    if summary and summary[1]:
+        out += [SUM_START, f"_Written {summary[0]}_", "", summary[1].strip(), SUM_END]
+    else:
+        out.append("_No summary written yet. Ask Claude to \"update the project summary\"._")
+    out += ["", "## Totals", "",
+           f"- **Time spent:** {fmt_dur(t['seconds'])} across {len(agg['days'])} active day(s){span}",
            f"- **Claude sessions:** {t['sessions']} · **prompts:** {t['prompts']} · "
            f"**responses:** {t['messages']}",
            f"- **Tokens:** {fmt_n(tokens_total(t))} total — input {fmt_n(t['input'])}, "
@@ -413,8 +422,27 @@ def render_report(cfg: dict, agg: dict, days: int, goals=None) -> str:
     return "\n".join(out) + "\n"
 
 
-def write_summary(root: Path, cfg: dict, data: dict) -> None:
-    text = render_report(cfg, aggregate(data, cfg), 30, read_goals(root))
+def read_work_summary(root: Path) -> tuple[str, str] | None:
+    """The written work summary kept in SUMMARY.md as (date written, markdown body).
+    After a union merge the file can hold several blocks; the newest one wins."""
+    try:
+        text = (root / TRACK_DIR / "SUMMARY.md").read_text()
+    except OSError:
+        return None
+    best = None
+    for m in SUM_BLOCK_RE.finditer(text):
+        block = m.group(1)
+        d = SUM_DATE_RE.search(block)
+        date = d.group(1) if d else "0000-00-00"
+        body = SUM_DATE_RE.sub("", block).strip()
+        if body and (best is None or date >= best[0]):
+            best = (date, body)
+    return best
+
+
+def write_summary(root: Path, cfg: dict, data: dict, summary=None) -> None:
+    summary = summary or read_work_summary(root)
+    text = render_report(cfg, aggregate(data, cfg), 30, read_goals(root), summary)
     path = root / TRACK_DIR / "SUMMARY.md"
     old = path.read_text() if path.exists() else ""
     strip = lambda s: re.sub(r"_Updated [^_]*_", "", s)  # noqa: E731
@@ -655,7 +683,12 @@ def cmd_report(args) -> None:
     root, cfg = load(args)
     data, _ = sync(root, cfg)
     agg = aggregate(data, cfg)
-    print(json.dumps(agg, indent=1) if args.json else render_report(cfg, agg, args.days, read_goals(root)))
+    if args.json:
+        ws = read_work_summary(root)
+        agg["work_summary"] = {"written": ws[0], "text": ws[1]} if ws else None
+        print(json.dumps(agg, indent=1))
+    else:
+        print(render_report(cfg, agg, args.days, read_goals(root), read_work_summary(root)))
 
 
 def cmd_digest(args) -> None:
@@ -717,6 +750,72 @@ def cmd_changelog_write(args) -> None:
     entries[day.isoformat()] = entry_text(day, aggregate(data, cfg), body, False)
     write_entries(root, cfg, entries)
     print(f"Wrote entry for {day.isoformat()} -> {changelog_path(root)}")
+    if not any(AUTO_MARK in t for t in entries.values()):
+        print("Next: refresh the work summary in SUMMARY.md (`summary-digest`, then "
+              "`summary-write`), then `commit`.")
+
+
+def entry_section(entry: str, name: str) -> str:
+    m = re.search(rf"^### {name}\s*\n(.*?)(?=^### |\Z)", entry, re.S | re.M)
+    return " ".join(m.group(1).split()) if m else ""
+
+
+def cmd_summary_digest(args) -> None:
+    """Raw material for writing the project-wide work summary."""
+    root, cfg = load(args)
+    data, _ = sync(root, cfg)
+    agg = aggregate(data, cfg)
+    t = agg["total"]
+    out = [f"# Summary digest — {cfg.get('name')}", "",
+           f"Totals: {fmt_dur(t['seconds'])} over {len(agg['days'])} active day(s)"
+           + (f" ({min(agg['days'])} → {max(agg['days'])})" if agg["days"] else "")
+           + f", {t['sessions']} session(s), {t['prompts']} prompt(s), "
+           f"{fmt_n(tokens_total(t))} tokens. (These numbers are printed in SUMMARY.md "
+           "automatically; the written summary need not repeat them.)"]
+    ws = read_work_summary(root)
+    out += ["", "## Current written summary" + (f" (written {ws[0]})" if ws else ""),
+            ws[1] if ws else "(none yet)"]
+    readme = next((root / n for n in ("README.md", "README.rst", "README.txt", "README")
+                   if (root / n).is_file()), None)
+    if readme:
+        lines = readme.read_text(errors="replace").splitlines()
+        out += ["", f"## {readme.name} (first 30 lines)"] + lines[:30]
+    count = git(root, "rev-list", "--count", "--all").strip()
+    first = git(root, "log", "--all", "--reverse", "--date=short", "--pretty=format:%ad").split("\n")[0]
+    if count:
+        out += ["", f"## Git: {count} commit(s) since {first}"]
+        out += [f"- {ln}" for ln in git(root, "log", "--all", "--no-merges", "-n", "25",
+                                          "--date=short", "--pretty=format:%ad %h %s").splitlines()]
+    open_g, done_g = read_goals(root)
+    out += ["", f"## Goals: {len(open_g)} open, {len(done_g)} done"]
+    out += [f"- [ ] {g}" for g in open_g] + [f"- [x] {g}" for g in done_g]
+    entries = read_entries(root)
+    days = sorted(entries, reverse=True)
+    out += ["", f"## Changelog ({len(days)} day(s)); latest {min(5, len(days))} in full"]
+    for d in days[:5]:
+        out += ["", entries[d]]
+    if days[5:]:
+        out += ["", "## Older days (summary line only)"]
+        for d in days[5:]:
+            e = entries[d]
+            line = entry_section(e, "Summary") or entry_section(e, "Changes")
+            out.append(f"- {d}: {line[:300]}" + (" (auto draft)" if AUTO_MARK in e else ""))
+    print("\n".join(out))
+
+
+def cmd_summary_write(args) -> None:
+    root, cfg = load(args)
+    tz = get_tz(cfg)
+    body = Path(args.file).read_text() if args.file else sys.stdin.read()
+    body = body.replace(SUM_START, "").replace(SUM_END, "")
+    body = re.sub(r"^#{1,2} (Work summary|.*— (project tracking|tracker summary))\s*$", "",
+                  body, flags=re.M | re.I)
+    body = SUM_DATE_RE.sub("", body).strip()
+    if not body:
+        die("empty summary body")
+    data, _ = sync(root, cfg)
+    write_summary(root, cfg, data, (today(tz).isoformat(), body))
+    print(f"Wrote work summary -> {root / TRACK_DIR / 'SUMMARY.md'}")
 
 
 def cmd_install_hooks(args) -> None:
@@ -775,15 +874,23 @@ def cmd_hook(args) -> None:
         register(root, cfg)
         if cfg.get("auto_commit"):
             commit_tracking(root)
+        me = Path(__file__).resolve()
         if drafts:
-            me = Path(__file__).resolve()
             print(f"[project-tracker] The daily changelog ({TRACK_DIR}/CHANGELOG.md) has "
                   f"auto-generated draft entr{'y' if len(drafts) == 1 else 'ies'} for "
                   f"{', '.join(drafts[-3:])}. Early in this session, replace each draft with a "
                   f"proper written entry: run `python3 \"{me}\" digest --date <day>` for the raw "
                   f"material, then pipe the entry body to `python3 \"{me}\" changelog-write "
-                  f"--date <day>`. See the project-tracker skill for the entry format. Do this "
-                  f"briefly and without derailing the user's request.")
+                  f"--date <day>`. Then refresh the project's work summary: `python3 \"{me}\" "
+                  f"summary-digest`, and pipe the new summary to `python3 \"{me}\" summary-write`. "
+                  f"See the project-tracker skill for both formats. Do this briefly and without "
+                  f"derailing the user's request.")
+        elif read_entries(root) and not read_work_summary(root):
+            print(f"[project-tracker] {TRACK_DIR}/SUMMARY.md has no written work summary yet. "
+                  f"Early in this session, write one: `python3 \"{me}\" summary-digest` for the "
+                  f"raw material, then pipe the summary to `python3 \"{me}\" summary-write`. See "
+                  f"the project-tracker skill for the format. Do this briefly and without "
+                  f"derailing the user's request.")
     except Exception as exc:  # noqa: BLE001
         print(f"project-tracker hook: {exc}", file=sys.stderr)
 
@@ -932,6 +1039,10 @@ def project_section(root: Path, cfg: dict, agg: dict, ndays: int, heading: bool)
     o = []
     if heading:
         o.append(f"<h2>{esc(cfg.get('name', root.name))}</h2>")
+    ws = read_work_summary(root)
+    if ws:
+        o.append(f'<div class="card"><h3>Work summary — written {esc(ws[0])}</h3>'
+                 f'<div class="log">{md_lite(ws[1])}</div></div>')
     o.append('<div class="tiles">' + "".join(
         f'<div class="card tile"><b>{esc(a)}</b><span>{esc(b)}</span></div>' for a, b in tiles) + "</div>")
     o.append('<div class="grid2">'
@@ -1048,6 +1159,13 @@ def main() -> None:
     p.add_argument("--date", help="YYYY-MM-DD | today | yesterday (default)")
     p.add_argument("--file")
     p.set_defaults(fn=cmd_changelog_write)
+
+    sub.add_parser("summary-digest", help="raw material for the project-wide work summary") \
+        .set_defaults(fn=cmd_summary_digest)
+    p = sub.add_parser("summary-write", help="write/replace the work summary in SUMMARY.md "
+                                             "(body on stdin)")
+    p.add_argument("--file")
+    p.set_defaults(fn=cmd_summary_write)
 
     sub.add_parser("install-hooks", help="(re)install the session hooks") \
         .set_defaults(fn=cmd_install_hooks)

@@ -2,7 +2,7 @@
 
 A Claude skill that keeps track of your projects. For each project it maintains, in `<project>/.project-tracker/`:
 
-- **`SUMMARY.md`** — Claude usage (sessions, prompts, tokens per model) and time spent working, in total and per day
+- **`SUMMARY.md`** — the tracking document: a short written summary of the work done, then total Claude usage (sessions, prompts, tokens per model) and time spent working, in total and per day
 - **`CHANGELOG.md`** — a daily build/change log; each day's first session writes up the previous day
 - **`GOALS.md`** — goals and next steps, ticked off as the daily log records them done
 - **`dashboard.html`** — charts of time and usage per day, on request
